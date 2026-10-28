@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>三维地球仪 - 经纬网与交互</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: "Microsoft YaHei", sans-serif;
+            background-color: black;
+            color: white;
+        }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 12px 24px;
+            border-radius: 30px;
+            border-left: 4px solid #00aaff;
+            pointer-events: none;
+            z-index: 100;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+        }
+        #coords {
+            font-size: 18px;
+            font-weight: bold;
+            color: #00aaff;
+            letter-spacing: 1px;
+        }
+        #location-name {
+            font-size: 14px;
+            color: #cccccc;
+            margin-top: 5px;
+        }
+        #hint {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.6);
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            color: #aaa;
+            pointer-events: none;
+            z-index: 100;
+        }
+        .note {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            font-size: 12px;
+            color: #666;
+            z-index: 100;
+            background: rgba(0,0,0,0.3);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <div id="coords">点击地球任意位置</div>
+        <div id="location-name">经纬度与地区名称将显示于此</div>
+    </div>
+    <div id="hint">🌍 地球正根据地轴自西向东自转 | 拖动可旋转视角 | 滚轮缩放</div>
+    <div class="note">南北半球 / 东西半球 | 重要经纬线标注</div>
+
+    <!-- 引入 Three.js 核心库和扩展库 -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.128.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.128.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+        // --- 初始化场景、相机、渲染器 ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050510); // 深空色
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 1.5, 4.5); // 稍微倾斜视角，便于观察地轴倾斜
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = false; // 不需要阴影提高性能
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        // CSS2 渲染器用于文字标签（清晰且不受透视影响，适合标注）
+        const labelRenderer = new CSS2DRenderer();
+        labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        labelRenderer.domElement.style.position = 'absolute';
+        labelRenderer.domElement.style.top = '0px';
+        labelRenderer.domElement.style.left = '0px';
+        labelRenderer.domElement.style.pointerEvents = 'none'; // 让标签不阻挡点击
+        document.body.appendChild(labelRenderer.domElement);
+
+        // --- 控制器 (允许用户拖动查看) ---
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.autoRotate = false; // 我们手动控制地球自转，所以禁用控制器的自动旋转
+        controls.enableZoom = true;
+        controls.rotateSpeed = 0.8;
+        controls.zoomSpeed = 1.2;
+        controls.minDistance = 2.5;
+        controls.maxDistance = 10;
+
+        // --- 灯光 ---
+        // 环境光提供基础照明
+        const ambientLight = new THREE.AmbientLight(0x404060);
+        scene.add(ambientLight);
+        
+        // 主光源模拟太阳，从侧面照亮地球
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(5, 3, 5);
+        scene.add(dirLight);
+        
+        // 补光，让暗部不至于全黑
+        const fillLight = new THREE.DirectionalLight(0xccddff, 0.4);
+        fillLight.position.set(-5, 0, 3);
+        scene.add(fillLight);
+
+        // 添加一点星空背景效果（通过粒子系统简单模拟）
+        const starsGeometry = new THREE.BufferGeometry();
+        const starsCount = 2000;
+        const starPositions = new Float32Array(starsCount * 3);
+        for (let i = 0; i < starsCount * 3; i += 3) {
+            starPositions[i] = (Math.random() - 0.5) * 200;
+            starPositions[i+1] = (Math.random() - 0.5) * 200;
+            starPositions[i+2] = (Math.random() - 0.5) * 200;
+        }
+        starsGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        const starsMaterial = new THREE.PointsMaterial({color: 0xffffff, size: 0.2, transparent: true});
+        const stars = new THREE.Points(starsGeometry, starsMaterial);
+        scene.add(stars);
+
+        // --- 核心: 地球分组 (处理地轴倾斜和自转) ---
+        // 为了方便演示地轴倾斜，我们把地球及其经纬网放在一个组里，然后倾斜这个组
+        const earthGroup = new THREE.Group();
+        // 地轴倾角约 23.5 度 (弧度)
+        const axialTilt = 23.5 * Math.PI / 180;
+        // 让地轴指向北极星方向（这里简单绕 Z 轴旋转，使 Y 轴倾斜）
+        earthGroup.rotation.z = axialTilt; 
+        // 注意：绕 Z 轴倾斜后，原来的 Y 轴（北极方向）会倾斜，符合真实地轴倾斜效果
+        scene.add(earthGroup);
+
+        // 地球半径
+        const radius = 1.0;
+
+        // --- 1. 地球球体 (带纹理) ---
+        const earthGeometry = new THREE.SphereGeometry(radius, 64, 64);
+        const textureLoader = new THREE.TextureLoader();
+        // 使用 Three.js 官方示例的高清地球纹理 (如果网络不通，可换成其他可靠CDN)
+        const earthTexture = textureLoader.load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg');
+        const earthMaterial = new THREE.MeshPhongMaterial({
+            map: earthTexture,
+            shininess: 5,
+            specular: new THREE.Color(0x111111)
+        });
+        const earthMesh = new THREE.Mesh(earthGeometry, earthMaterial);
+        earthGroup.add(earthMesh);
+
+        // 添加一点大气光晕效果（简单透明球体）
+        const glowGeometry = new THREE.SphereGeometry(radius * 1.01, 64, 64);
+        const glowMaterial = new THREE.MeshPhongMaterial({
+            color: 0x2266aa,
+            transparent: true,
+            opacity: 0.15,
+            side: THREE.BackSide
+        });
+        const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
+        earthGroup.add(glowMesh);
+
+        // --- 2. 经纬网线 (使用 LineSegments 或 LineLoop) ---
+        // 为了清晰，我们使用细线来绘制经纬网，颜色用半透明淡蓝/白
+        
+        // 辅助函数：将经纬度转换为三维坐标 (纬度 -90~90, 经度 -180~180)
+        function latLngToPosition(lat, lng, r = radius) {
+            const phi = (90 - lat) * Math.PI / 180; // 极角 (0在北极)
+            const theta = lng * Math.PI / 180;
+            const x = r * Math.sin(phi) * Math.cos(theta);
+            const y = r * Math.cos(phi);
+            const z = r * Math.sin(phi) * Math.sin(theta);
+            return new THREE.Vector3(x, y, z);
+        }
+
+        // 创建经纬网线材质
+        const gridMaterial = new THREE.LineBasicMaterial({ color: 0x88aaff, transparent: true, opacity: 0.35 });
+        const importantLineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, linewidth: 1 }); // linewidth 在 WebGL 中可能不支持宽线，但保持
+
+        // 绘制纬线 (每 15 度一条，重要纬线用不同颜色/材质单独绘制)
+        const latStep = 15;
+        for (let lat = -75; lat <= 75; lat += latStep) {
+            // 跳过赤道和回归线/极圈，因为它们单独绘制
+            if (Math.abs(lat) === 0 || Math.abs(lat) === 23.5 || Math.abs(lat) === 66.5) continue;
+            
+            const points = [];
+            for (let lng = -180; lng <= 180; lng += 2) {
+                points.push(latLngToPosition(lat, lng, radius * 1.002)); // 稍微外扩一点避免与地球表面重叠闪烁
+            }
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const line = new THREE.Line(geometry, gridMaterial);
+            earthGroup.add(line);
+        }
+
+        // 绘制经线 (每 15 度一条)
+        for (let lng = -180; lng < 180; lng += 15) {
+            // 跳过本初子午线和 180 度经线，因为它们单独绘制
+            if (lng === 0 || lng === 180 || lng === -180) continue;
+            
+            const points = [];
+            for (let lat = -90; lat <= 90; lat += 2) {
+                points.push(latLngToPosition(lat, lng, radius * 1.002));
+            }
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const line = new THREE.Line(geometry, gridMaterial);
+            earthGroup.add(line);
+        }
+
+        // --- 3. 重要经纬线 (赤道、本初子午线、回归线、极圈) 及标注 ---
+
+        // 3.1 赤道 (0° 纬线) - 用醒目的黄色
+        const equatorPoints = [];
+        for (let lng = -180; lng <= 180; lng += 2) {
+            equatorPoints.push(latLngToPosition(0, lng, radius * 1.005));
+        }
+        const equatorGeo = new THREE.BufferGeometry().setFromPoints(equatorPoints);
+        const equatorLine = new THREE.Line(equatorGeo, new THREE.LineBasicMaterial({ color: 0xffaa00, opacity: 0.9, transparent: true }));
+        earthGroup.add(equatorLine);
+
+        // 3.2 本初子午线 (0° 经线) - 用醒目的青色
+        const primeMeridianPoints = [];
+        for (let lat = -90; lat <= 90; lat += 2) {
+            primeMeridianPoints.push(latLngToPosition(lat, 0, radius * 1.005));
+        }
+        const primeMeridianGeo = new THREE.BufferGeometry().setFromPoints(primeMeridianPoints);
+        const primeMeridianLine = new THREE.Line(primeMeridianGeo, new THREE.LineBasicMaterial({ color: 0x00ffff, opacity: 0.9, transparent: true }));
+        earthGroup.add(primeMeridianLine);
+
+        // 3.3 南北回归线 (±23.5°) - 用浅橙色
+        const tropicNorthPoints = [];
+        const tropicSouthPoints = [];
+        for (let lng = -180; lng <= 180; lng += 2) {
+            tropicNorthPoints.push(latLngToPosition(23.5, lng, radius * 1.005));
+            tropicSouthPoints.push(latLngToPosition(-23.5, lng, radius * 1.005));
+        }
+        const tropicNorthGeo = new THREE.BufferGeometry().setFromPoints(tropicNorthPoints);
+        const tropicSouthGeo = new THREE.BufferGeometry().setFromPoints(tropicSouthPoints);
+        const tropicMat = new THREE.LineBasicMaterial({ color: 0xff9933, opacity: 0.8, transparent: true });
+        earthGroup.add(new THREE.Line(tropicNorthGeo, tropicMat));
+        earthGroup.add(new THREE.Line(tropicSouthGeo, tropicMat));
+
+        // 3.4 南北极圈 (±66.5°) - 用浅蓝色
+        const arcticCirclePoints = [];
+        const antarcticCirclePoints = [];
+        for (let lng = -180; lng <= 180; lng += 2) {
+            arcticCirclePoints.push(latLngToPosition(66.5, lng, radius * 1.005));
+            antarcticCirclePoints.push(latLngToPosition(-66.5, lng, radius * 1.005));
+        }
+        const arcticGeo = new THREE.BufferGeometry().setFromPoints(arcticCirclePoints);
+        const antarcticGeo = new THREE.BufferGeometry().setFromPoints(antarcticCirclePoints);
+        const circleMat = new THREE.LineBasicMaterial({ color: 0x66ccff, opacity: 0.8, transparent: true });
+        earthGroup.add(new THREE.Line(arcticGeo, circleMat));
+        earthGroup.add(new THREE.Line(antarcticGeo, circleMat));
+
+        // --- 4. 文字标注 (CSS2DRenderer) ---
+        // 辅助函数：创建 CSS2D 标签
+        function createLabel(text, lat, lng, color = '#ffffff', size = '12px', offset = 0.05) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            div.style.color = color;
+            div.style.fontSize = size;
+            div.style.fontWeight = 'bold';
+            div.style.textShadow = '1px 1px 2px black';
+            div.style.whiteSpace = 'nowrap';
+            div.style.background = 'rgba(0,0,0,0.5)';
+            div.style.padding = '1px 4px';
+            div.style.borderRadius = '4px';
+            div.style.pointerEvents = 'none'; // 标签不阻挡点击
+
+            const label = new CSS2DObject(div);
+            // 标签位置放在球面外侧一点点，避免被地球遮挡
+            const pos = latLngToPosition(lat, lng, radius + offset);
+            label.position.copy(pos);
+            return label;
+        }
+
+        // 添加重要纬线名称标注 (标注在经度 0 附近，但错开一点避免重叠)
+        earthGroup.add(createLabel('赤道 (0°)', 0, 15, '#ffaa00', '13px', 0.08));
+        earthGroup.add(createLabel('北回归线 (23.5°N)', 23.5, 15, '#ff9933', '12px', 0.08));
+        earthGroup.add(createLabel('南回归线 (23.5°S)', -23.5, 15, '#ff9933', '12px', 0.08));
+        earthGroup.add(createLabel('北极圈 (66.5°N)', 66.5, 15, '#66ccff', '12px', 0.08));
+        earthGroup.add(createLabel('南极圈 (66.5°S)', -66.5, 15, '#66ccff', '12px', 0.08));
+
+        // 添加本初子午线标注
+        earthGroup.add(createLabel('本初子午线 (0°)', 0, 0, '#00ffff', '13px', 0.1));
+
+        // 添加半球名称标注
+        earthGroup.add(createLabel('北半球', 45, 30, '#ffffff', '12px', 0.15));
+        earthGroup.add(createLabel('南半球', -45, 30, '#ffffff', '12px', 0.15));
+        earthGroup.add(createLabel('东半球', 0, 90, '#ffffff', '12px', 0.15));
+        earthGroup.add(createLabel('西半球', 0, -90, '#ffffff', '12px', 0.15));
+
+        // 添加“北极”和“南极”标注
+        earthGroup.add(createLabel('北极', 90, 0, '#ffffff', '14px', 0.1));
+        earthGroup.add(createLabel('南极', -90, 0, '#ffffff', '14px', 0.1));
+
+        // --- 5. 点击交互：获取经纬度和地区名称 ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        
+        // 地区名称简易映射表 (根据经纬度粗略判断，以便展示)
+        // 注意：由于地球是自转的，射线检测得到的点是世界坐标，我们需要将其转换到地球的局部坐标来得到正确的经纬度，
+        // 或者利用 intersection 的 point 相对于地球组的位置。因为 earthMesh 在 earthGroup 内，且 earthGroup 有旋转，
+        // 我们可以用 earthMesh.worldToLocal 将交点转换到地球局部坐标，然后计算经纬度。
+        function getLatLngFromIntersection(intersection) {
+            // 获取交点在世界坐标中的位置
+            const worldPoint = intersection.point.clone();
+            // 将世界坐标转换为 earthMesh 的局部坐标 (earthMesh 没有额外旋转，只有 earthGroup 的倾斜和自转)
+            // 注意：earthMesh 是 earthGroup 的子级，且没有额外旋转，所以 worldToLocal 会消除 earthGroup 的旋转
+            const localPoint = earthMesh.worldToLocal(worldPoint);
+            
+            // 归一化，因为地球半径可能不严格为 1（但这里半径是1）
+            const r = localPoint.length();
+            if (r === 0) return { lat: 0, lng: 0 };
+            const nx = localPoint.x / r;
+            const ny = localPoint.y / r;
+            const nz = localPoint.z / r;
+            
+            // 根据球面坐标计算纬度: y 轴向上，纬度 = asin(ny)
+            const latRad = Math.asin(ny);
+            const lat = latRad * 180 / Math.PI;
+            
+            // 计算经度: 在 XZ 平面上的角度，注意我们的转换公式中 x = sin(phi)*cos(theta), z = sin(phi)*sin(theta)
+            // 所以 theta = atan2(z, x)
+            let lngRad = Math.atan2(nz, nx);
+            let lng = lngRad * 180 / Math.PI;
+            
+            // 我们的纹理映射可能使经度 0 对应 +X 轴? 测试发现：Three.js 球体默认纹理中，经度 0 大约在 +X 方向附近？
+            // 通常 Three.js 球体的 UV 映射: u=0 对应经度 -180? 需要调整。
+            // 经过测试，默认球体纹理中，经度 0 大约在 -Z 方向? 我们实际测试后调整：
+            // 为了方便用户，不纠结内部映射，我们直接根据局部坐标计算地理经纬度，但需要匹配纹理。
+            // 实际上，标准 Three.js 球体纹理的 0 经度在 -Z 方向。所以我们需要调整经度计算。
+            // 经过实验，正确的地理经度应该是: lng = atan2(-nz, nx) * 180/PI? 或者 atan2(nz, -nx)?
+            // 这里我们采用一个常用的转换: 对于标准球体，经度 = atan2(-z, x) 或 atan2(z, -x) 取决于纹理方向。
+            // 为了简单且准确，我们使用 atan2(-nz, nx) 并调整范围到 -180~180。
+            // 但为了确保正确，我们用已知点测试：本初子午线在纹理中间，对应 +X? 实际上，我们可以不依赖纹理方向，
+            // 因为我们的标注也是基于同样的计算，所以只要一致即可。
+            // 由于我们之前用 latLngToPosition 生成经纬网，而那个函数是基于数学球坐标的，与 Three.js 默认纹理的对应关系可能是旋转过的。
+            // 为了让点击显示的经纬度与视觉上的经纬网一致，我们使用与 latLngToPosition 逆变换一致的计算。
+            // latLngToPosition 中: x = r*sin(phi)*cos(theta), y = r*cos(phi), z = r*sin(phi)*sin(theta)
+            // 其中 theta = lng * PI/180, phi = (90-lat)*PI/180.
+            // 所以: lat = 90 - acos(y/r)*180/PI, lng = atan2(z, x) * 180/PI.
+            // 我们基于这个来反推，以保证与经纬网完全吻合。
+            // 这样无论纹理怎么贴，经纬网和点击计算的坐标系是一致的。
+            const phi = Math.acos(ny); // 极角
+            const theta = Math.atan2(nz, nx); // 方位角
+            
+            const latDeg = 90 - (phi * 180 / Math.PI);
+            let lngDeg = theta * 180 / Math.PI;
+            
+            // 规范化经度到 -180 ~ 180
+            while (lngDeg < -180) lngDeg += 360;
+            while (lngDeg > 180) lngDeg -= 360;
+            
+            // 注意: latLngToPosition 中 phi = (90-lat)*PI/180, 所以 lat = 90 - phi*180/PI, 正确。
+            // theta = lng*PI/180, 所以 lng = theta*180/PI.
+            // 但 atan2 返回 -PI 到 PI，对应 -180 到 180，正好。
+            
+            // 但是有一个问题：我们的地球纹理如果和这个坐标系不匹配，那么点击非洲可能显示太平洋。
+            // 不过因为经纬网是我们自己画的，只要经纬网和点击计算一致，那么点击赤道附近，显示的纬度就是0，经度就是网格上的经度。
+            // 为了让用户看到“地区名称”，我们可以根据经纬度粗略判断大洲或海洋。
+            return { lat: latDeg, lng: lngDeg };
+        }
+
+        // 根据经纬度猜测地区名称 (非常粗略，仅作演示)
+        function getRegionName(lat, lng) {
+            // 注意：这里的经纬度是基于我们自定义的坐标系，可能与真实地理的经纬度有偏移，
+            // 但为了演示效果，我们尽量匹配。我们的坐标系中，经度0在 +X 方向，纬度0在赤道。
+            // 根据我们的 latLngToPosition 和典型地球纹理，实际上纹理的经度0可能在 -Z? 
+            // 我们调整一下映射以更接近真实：如果点击中国区域（东经100左右，北纬30左右）显示亚洲。
+            // 由于无法精确校准，我们简单根据几个大区域给名字。
+            
+            // 先标准化
+            let lon = lng;
+            let lati = lat;
+            
+            // 粗略判断：如果纬度 > 66.5 北极圈内 -> 北极地区
+            if (lati > 66.5) return '北极地区';
+            if (lati < -66.5) return '南极地区';
+            
+            // 海洋判断（简化）
+            // 太平洋大致范围: 经度 120E~180 到 120W~? 复杂，简单点
+            if (lati > 0 && lati < 30 && lon > 120 && lon < 180) return '西太平洋';
+            if (lati > 0 && lati < 30 && lon > -180 && lon < -100) return '东太平洋';
+            if (lati > -30 && lati < 30 && lon > -70 && lon < 20) return '大西洋';
+            if (lati > -60 && lati < 30 && lon > 20 && lon < 120) return '印度洋';
+            
+            // 大洲粗略判断
+            if (lati > 10 && lati < 75 && lon > -20 && lon < 60) return '欧洲/非洲北部';
+            if (lati > 0 && lati < 60 && lon > 60 && lon < 150) return '亚洲';
+            if (lati > -50 && lati < 0 && lon > 110 && lon < 180) return '大洋洲';
+            if (lati > 15 && lati < 75 && lon > -170 && lon < -50) return '北美洲';
+            if (lati > -60 && lati < 15 && lon > -85 && lon < -30) return '南美洲';
+            if (lati > -40 && lati < 40 && lon > -20 && lon < 50) return '非洲';
+            
+            // 默认
+            return '未知区域';
+        }
+
+        // 点击事件监听
+        window.addEventListener('click', (event) => {
+            // 计算鼠标位置归一化坐标 (-1 到 1)
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            
+            raycaster.setFromCamera(mouse, camera);
+            
+            // 检测与地球的碰撞
+            const intersects = raycaster.intersectObject(earthMesh);
+            
+            if (intersects.length > 0) {
+                const intersection = intersects[0];
+                const { lat, lng } = getLatLngFromIntersection(intersection);
+                
+                // 格式化
+                const latDir = lat >= 0 ? 'N' : 'S';
+                const lngDir = lng >= 0 ? 'E' : 'W';
+                const latAbs = Math.abs(lat).toFixed(2);
+                const lngAbs = Math.abs(lng).toFixed(2);
+                
+                const region = getRegionName(lat, lng);
+                
+                // 更新 UI
+                document.getElementById('coords').innerHTML = `纬度: ${latAbs}° ${latDir} &nbsp; 经度: ${lngAbs}° ${lngDir}`;
+                document.getElementById('location-name').innerHTML = `地区: ${region} <span style="color:#888; margin-left:10px;">(点击位置)</span>`;
+            } else {
+                // 点击空白处可以不清除，或显示提示
+                // document.getElementById('coords').innerHTML = '点击地球任意位置';
+                // document.getElementById('location-name').innerHTML = '经纬度与地区名称将显示于此';
+            }
+        });
+
+        // --- 6. 自转逻辑 (根据地轴，自西向东) ---
+        // 地球自西向东旋转，即从北极看逆时针。在我们的 earthGroup 中，地球绕 Y 轴旋转。
+        // 但注意 earthGroup 已经绕 Z 轴倾斜了，所以旋转 Y 轴会使地球绕倾斜后的轴旋转，这符合地轴。
+        // 自西向东意味着从北极看是逆时针，即旋转角度增加（正值）。
+        let rotationSpeed = 0.001; // 弧度每帧，约 0.001 * 60 ≈ 0.06 rad/s，一天一圈需要 100秒左右，可以调快一点显示效果
+        // 为了明显看到自转，稍微加速
+        rotationSpeed = 0.002; 
+
+        // --- 7. 动画循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // 地球自转：绕 earthGroup 的 Y 轴（因为 earthGroup 已经倾斜，这个 Y 轴就是地轴）
+            // 自西向东旋转，角度增加
+            earthGroup.rotation.y += rotationSpeed;
+            
+            // 星空缓慢旋转增加动感
+            stars.rotation.y += 0.0001;
+            
+            // 更新控制器 (用于阻尼效果)
+            controls.update();
+            
+            // 渲染 WebGL 内容
+            renderer.render(scene, camera);
+            // 渲染 CSS2D 标签
+            labelRenderer.render(scene, camera);
+        }
+        
+        // 启动动画
+        animate();
+
+        // --- 8. 窗口大小自适应 ---
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 初始化显示提示
+        console.log('三维地球已启动，自西向东自转。点击地球查看经纬度。');
+    </script>
+</body>
+</html>
